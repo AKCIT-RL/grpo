@@ -1,0 +1,7 @@
+runs*
+wandb/
+datasets*
+models*
+.vscode/
+deprecated/
+sweeps/
