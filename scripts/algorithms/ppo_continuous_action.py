@@ -151,10 +151,10 @@ if __name__ == "__main__":
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    group_name, run_name = generate_new_name(vars(args))
     if args.track:
         import wandb
-
-        group_name, run_name = generate_new_name(vars(args))
 
         wandb.init(
             project=args.wandb_project_name,
