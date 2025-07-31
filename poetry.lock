@@ -1916,7 +1916,7 @@ description = "Read metadata from Python packages"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "python_version == \"3.9\" or extra == \"docs\""
+markers = "python_version == \"3.10\" and extra == \"docs\" or python_version == \"3.9\""
 files = [
     {file = "importlib_metadata-5.2.0-py3-none-any.whl", hash = "sha256:0eafa39ba42bf225fc00e67f701d71f85aead9f878569caf13c3724f704b970f"},
     {file = "importlib_metadata-5.2.0.tar.gz", hash = "sha256:404d48d62bba0b7a77ff9d405efd91501bef2e67ff4ace0bed40a0cf28c3c7cd"},
@@ -1937,7 +1937,7 @@ description = "Read resources from Python packages"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "python_version == \"3.9\" or extra == \"jax\" or extra == \"dqn-jax\" or extra == \"dqn-atari-jax\" or extra == \"c51-jax\" or extra == \"c51-atari-jax\" or extra == \"ppo-atari-envpool-xla-jax-scan\" or extra == \"qdagger-dqn-atari-jax-impalacnn\""
+markers = "python_version == \"3.10\" and (extra == \"jax\" or extra == \"dqn-jax\" or extra == \"dqn-atari-jax\" or extra == \"c51-jax\" or extra == \"c51-atari-jax\" or extra == \"ppo-atari-envpool-xla-jax-scan\" or extra == \"qdagger-dqn-atari-jax-impalacnn\") or python_version == \"3.9\""
 files = [
     {file = "importlib_resources-6.5.2-py3-none-any.whl", hash = "sha256:789cfdc3ed28c78b67a06acb8126751ced69a3d5f79c095a98298cd8a760ccec"},
     {file = "importlib_resources-6.5.2.tar.gz", hash = "sha256:185f87adef5bcc288449d98fb4fba07cea78bc036455dd44c5fc4a2fe78fed2c"},
@@ -5391,7 +5391,7 @@ GitPython = ">=1.0.0,<3.1.29 || >3.1.29"
 pathtools = "*"
 protobuf = [
     {version = ">=3.15.0,<4.21.0 || >4.21.0,<5", markers = "python_version == \"3.9\" and sys_platform == \"linux\""},
-    {version = ">=3.19.0,<4.21.0 || >4.21.0,<5", markers = "python_version > \"3.9\" or sys_platform != \"linux\""},
+    {version = ">=3.19.0,<4.21.0 || >4.21.0,<5", markers = "sys_platform != \"linux\""},
 ]
 psutil = ">=5.0.0"
 PyYAML = "*"
@@ -5571,7 +5571,7 @@ description = "Backport of pathlib-compatible object wrapper for zip files"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "python_version == \"3.9\" or extra == \"docs\""
+markers = "python_version == \"3.10\" and extra == \"docs\" or python_version == \"3.9\""
 files = [
     {file = "zipp-3.23.0-py3-none-any.whl", hash = "sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e"},
     {file = "zipp-3.23.0.tar.gz", hash = "sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166"},

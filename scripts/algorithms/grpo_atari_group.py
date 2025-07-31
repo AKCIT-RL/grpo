@@ -3,6 +3,7 @@ import random
 import time
 from dataclasses import dataclass
 
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -25,6 +26,8 @@ from stable_baselines3.common.atari_wrappers import (
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
+    algo_name: str = "grpo_atari_group"
+    """The name of the algorithm to use"""
     seed: int = 1
     """seed of the experiment"""
     torch_deterministic: bool = True
@@ -136,10 +139,12 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-    
+    #run_name = f"{args.env_id}__{args.exp_name}__{args.seed}"
+
     if args.track:
         import wandb
+
+        group_name, run_name = generate_new_name(vars(args))[0]
 
         wandb.init(
             project=args.wandb_project_name,
@@ -149,7 +154,8 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            group=f"group_atari_{args.env_id}__{args.exp_name}", 
+            # group=f"group_atari_{args.env_id}__{args.exp_name}",
+            group=group_name,
         )
     
     writer = SummaryWriter(f"runs/{run_name}")
@@ -195,7 +201,7 @@ if __name__ == "__main__":
     next_obs = torch.tensor(next_obs, dtype=torch.float32).to(device)
     
     # Inicializa next_done com zeros, pois os ambientes não estão terminados no início
-    next_done = torch.zeros(args.num_envs, dtype=torch.float32).to(device) 
+    next_done = torch.zeros(args.num_envs, dtype=torch.bool).to(device) 
 
     for iteration in range(1, args.num_iterations + 1):
         # Annealing the rate if instructed to do so.
@@ -229,7 +235,7 @@ if __name__ == "__main__":
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward, dtype=torch.float32).to(device).view(-1)
             next_obs = torch.tensor(next_obs, dtype=torch.float32).to(device)
-            next_done = torch.tensor(next_done, dtype=torch.float32).to(device)
+            next_done = torch.tensor(next_done, dtype=torch.bool).to(device)
 
             if "final_info" in infos:
                 for info in infos["final_info"]:
@@ -243,7 +249,7 @@ if __name__ == "__main__":
         for env_idx in range(args.num_envs):
             current_return = 0
             for t in reversed(range(args.num_steps)):
-                current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
+                current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx].float())
                 returns_per_env[t, env_idx] = current_return
         
         # Normaliza esses retornos em todo o batch (todas as trajetórias combinadas)
