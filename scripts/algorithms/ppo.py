@@ -12,12 +12,15 @@ import torch.optim as optim
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from utils.rename_wandb import generate_new_name
 
 
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
+    algo_name: str = "ppo"
+    """The name of the algorithm to use"""
     seed: int = 1
     """seed of the experiment"""
     torch_deterministic: bool = True
@@ -131,7 +134,8 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    group_name, run_name = generate_new_name(vars(args))
     if args.track:
         import wandb
 
@@ -143,7 +147,7 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            group=f"group_{args.env_id}__{args.exp_name}", 
+            group=group_name,
         )
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
