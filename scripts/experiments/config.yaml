@@ -13,4 +13,8 @@ ent_coef: 0.01
 vf_coef: 0.5
 max_grad_norm: 0.5
 remove_value_loss: True
-drop_critic: False
+drop_critic: True
+grpo_group: False
+grpo_kmeans: True
+entropy: True
+grpo_group_std: True
