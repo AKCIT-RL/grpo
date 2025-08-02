@@ -331,8 +331,8 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss (Lógica condicional para remove_value_loss)
-                loss = 0 # Inicializa a perda total
+                # Value loss 
+                loss = 0 
                 if not args.remove_value_loss:
                     newvalue = newvalue.view(-1)
                     if args.clip_vloss:
@@ -348,10 +348,10 @@ if __name__ == "__main__":
                     else:
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
                     
-                    loss += v_loss * args.vf_coef # Adiciona a perda do valor se não for removida
+                    loss += v_loss * args.vf_coef 
 
                 entropy_loss = entropy.mean()
-                loss += pg_loss - args.ent_coef * entropy_loss # Sempre adiciona a perda da política e entropia
+                loss += pg_loss - args.ent_coef * entropy_loss 
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -361,7 +361,6 @@ if __name__ == "__main__":
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
 
-        # Logging condicional para value_loss e explained_variance
         if not args.remove_value_loss:
             y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
             var_y = np.var(y_true)
