@@ -208,3 +208,5 @@ __marimo__/
 
 *runs
 *wandb
+scripts/experiments/drop_critic
+scripts/experiments/remove_value_loss

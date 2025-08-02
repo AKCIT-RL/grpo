@@ -2,90 +2,94 @@
 import os
 import random
 import time
-from dataclasses import dataclass
-from utils.rename_wandb import generate_new_name
-
+import argparse 
 
 import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import tyro
-from torch.distributions.normal import Normal
+from torch.distributions.normal import Normal 
 from torch.utils.tensorboard import SummaryWriter
+import yaml 
+from utils.rename_wandb import generate_new_name
 
 
-@dataclass
-class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
-    algo_name: str = "ppo_continuous_action"
-    """The name of the algorithm to use"""
-    seed: int = 1
-    """seed of the experiment"""
-    torch_deterministic: bool = True
-    """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
-    """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
-    """the wandb's project name"""
-    wandb_entity: str = None
-    """the entity (team) of wandb's project"""
-    capture_video: bool = False
-    """whether to capture videos of the agent performances (check out `videos` folder)"""
-    save_model: bool = False
-    """whether to save model into the `runs/{run_name}` folder"""
-    upload_model: bool = False
-    """whether to upload the saved model to huggingface"""
-    hf_entity: str = ""
-    """the user or org name of the model repository from the Hugging Face Hub"""
+def add_args(parser):
+    # GRPO flags
+    parser.add_argument("--remove-value-loss", type=bool, action=argparse.BooleanOptionalAction, default=False,
+                        help="If toggled, removes the value loss from the total loss calculation.")
+    parser.add_argument("--drop-critic", type=bool, action=argparse.BooleanOptionalAction, default=False,
+                        help="If toggled, the GAE calculation will use mean rewards instead of critic values.")
+
+    # General settings
+    parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
+                        help="the name of this experiment")
+    parser.add_argument("--algo-name", type=str, default="ppo_continuous_action",
+                        help="The name of the algorithm to use")
+    parser.add_argument("--seed", type=int, default=1,
+                        help="seed of the experiment")
+    parser.add_argument("--torch-deterministic", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                        help="if toggled, `torch.backends.cudnn.deterministic=False`")
+    parser.add_argument("--cuda", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                        help="if toggled, cuda will be enabled by default")
+    parser.add_argument("--track", type=bool, default=False, action=argparse.BooleanOptionalAction,
+                        help="if toggled, this experiment will be tracked with Weights and Biases")
+    parser.add_argument("--wandb-project-name", type=str, default="cleanRL",
+                        help="the wandb's project name")
+    parser.add_argument("--wandb-entity", type=str, default=None,
+                        help="the entity (team) of wandb's project")
+    parser.add_argument("--capture-video", type=bool, default=False, action=argparse.BooleanOptionalAction,
+                        help="whether to capture videos of the agent performances (check out `videos` folder)")
+    parser.add_argument("--save-model", type=bool, default=False, action=argparse.BooleanOptionalAction,
+                        help="whether to save model into the `runs/{run_name}` folder")
+    parser.add_argument("--upload-model", type=bool, default=False, action=argparse.BooleanOptionalAction,
+                        help="whether to upload the saved model to huggingface")
+    parser.add_argument("--hf-entity", type=str, default="",
+                        help="the user or org name of the model repository from the Hugging Face Hub")
 
     # Algorithm specific arguments
-    env_id: str = "HalfCheetah-v4"
-    """the id of the environment"""
-    total_timesteps: int = 1000000
-    """total timesteps of the experiments"""
-    learning_rate: float = 3e-4
-    """the learning rate of the optimizer"""
-    num_envs: int = 1
-    """the number of parallel game environments"""
-    num_steps: int = 2048
-    """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
-    """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.99
-    """the discount factor gamma"""
-    gae_lambda: float = 0.95
-    """the lambda for the general advantage estimation"""
-    num_minibatches: int = 32
-    """the number of mini-batches"""
-    update_epochs: int = 10
-    """the K epochs to update the policy"""
-    norm_adv: bool = True
-    """Toggles advantages normalization"""
-    clip_coef: float = 0.2
-    """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
-    """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.0
-    """coefficient of the entropy"""
-    vf_coef: float = 0.5
-    """coefficient of the value function"""
-    max_grad_norm: float = 0.5
-    """the maximum norm for the gradient clipping"""
-    target_kl: float = None
-    """the target KL divergence threshold"""
+    parser.add_argument("--env-id", type=str, default="HalfCheetah-v4",
+                        help="the id of the environment")
+    parser.add_argument("--total-timesteps", type=int, default=1000000,
+                        help="total timesteps of the experiments")
+    parser.add_argument("--learning-rate", type=float, default=3e-4,
+                        help="the learning rate of the optimizer")
+    parser.add_argument("--num-envs", type=int, default=1,
+                        help="the number of parallel game environments")
+    parser.add_argument("--num-steps", type=int, default=2048,
+                        help="the number of steps to run in each environment per policy rollout")
+    parser.add_argument("--anneal-lr", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                        help="Toggle learning rate annealing for policy and value networks")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="the discount factor gamma")
+    parser.add_argument("--gae-lambda", type=float, default=0.95,
+                        help="the lambda for the general advantage estimation")
+    parser.add_argument("--num-minibatches", type=int, default=32,
+                        help="the number of mini-batches")
+    parser.add_argument("--update-epochs", type=int, default=10,
+                        help="the K epochs to update the policy")
+    parser.add_argument("--norm-adv", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                        help="Toggles advantages normalization")
+    parser.add_argument("--clip-coef", type=float, default=0.2,
+                        help="the surrogate clipping coefficient")
+    parser.add_argument("--clip-vloss", type=bool, default=True, action=argparse.BooleanOptionalAction,
+                        help="Toggles whether or not to use a clipped loss for the value function, as per the paper.")
+    parser.add_argument("--ent-coef", type=float, default=0.0,
+                        help="coefficient of the entropy")
+    parser.add_argument("--vf-coef", type=float, default=0.5,
+                        help="coefficient of the value function")
+    parser.add_argument("--max-grad-norm", type=float, default=0.5,
+                        help="the maximum norm for the gradient clipping")
+    parser.add_argument("--target-kl", type=float, default=None,
+                        help="the target KL divergence threshold")
+    parser.add_argument("--config", type=str, default="config.yaml",
+                        help="Path to the YAML configuration file.")
 
     # to be filled in runtime
-    batch_size: int = 0
-    """the batch size (computed in runtime)"""
-    minibatch_size: int = 0
-    """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 0
-    """the number of iterations (computed in runtime)"""
+    parser.add_argument("--batch-size", type=int, default=0, help="the batch size (computed in runtime)")
+    parser.add_argument("--minibatch-size", type=int, default=0, help="the mini-batch size (computed in runtime)")
+    parser.add_argument("--num-iterations", type=int, default=0, help="the number of iterations (computed in runtime)")
 
 
 def make_env(env_id, idx, capture_video, run_name, gamma):
@@ -142,19 +146,42 @@ class Agent(nn.Module):
         probs = Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
+        # Note: Para ações contínuas, log_prob e entropy são somados sobre as dimensões da ação
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
 
 
 if __name__ == "__main__":
-    args = tyro.cli(Args)
+    parser = argparse.ArgumentParser()
+    add_args(parser) 
+
+    temp_args, remaining_argv = parser.parse_known_args()
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file_path = os.path.join(script_dir, temp_args.config)
+
+    yaml_config = {} 
+    if os.path.exists(config_file_path):
+        with open(config_file_path, "r") as f:
+            yaml_config = yaml.safe_load(f)
+        if yaml_config is None: 
+            yaml_config = {}
+    else:
+        print(f"Aviso: Arquivo de configuração '{config_file_path}' não encontrado. Usando apenas padrões do argparse e argumentos de linha de comando.")
+
+    for key, value in yaml_config.items():
+        attr_name = key.replace('-', '_')
+        if hasattr(temp_args, attr_name):
+            setattr(temp_args, attr_name, value)
+
+    args = parser.parse_args(remaining_argv, namespace=temp_args)
+
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    group_name, run_name = generate_new_name(vars(args))
     if args.track:
         import wandb
-
-        group_name, run_name = generate_new_name(vars(args))
 
         wandb.init(
             project=args.wandb_project_name,
@@ -238,19 +265,35 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
+            if args.drop_critic:
+                rewards_mean = torch.mean(rewards, dim=1) 
+                next_value = rewards_mean[-1].unsqueeze(dim=-1).unsqueeze(dim=-1)
+                advantages = torch.zeros_like(rewards).to(device)
+                lastgaelam = 0
+                for t in reversed(range(args.num_steps)):
+                    if t == args.num_steps - 1:
+                        nextnonterminal = 1.0 - next_done
+                        nextvalues = next_value 
+                    else:
+                        nextnonterminal = 1.0 - dones[t + 1]
+                        nextvalues = (rewards_mean.unsqueeze(1))[t + 1] 
+                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - (rewards_mean.unsqueeze(1))[t]
+                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                returns = advantages + rewards_mean.unsqueeze(1) 
+            else: 
+                next_value = agent.get_value(next_obs).reshape(1, -1)
+                advantages = torch.zeros_like(rewards).to(device)
+                lastgaelam = 0
+                for t in reversed(range(args.num_steps)):
+                    if t == args.num_steps - 1:
+                        nextnonterminal = 1.0 - next_done
+                        nextvalues = next_value
+                    else:
+                        nextnonterminal = 1.0 - dones[t + 1]
+                        nextvalues = values[t + 1]
+                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                returns = advantages + values
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -288,23 +331,27 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                # Value loss (Lógica condicional para remove_value_loss)
+                loss = 0 # Inicializa a perda total
+                if not args.remove_value_loss:
+                    newvalue = newvalue.view(-1)
+                    if args.clip_vloss:
+                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                        v_clipped = b_values[mb_inds] + torch.clamp(
+                            newvalue - b_values[mb_inds],
+                            -args.clip_coef,
+                            args.clip_coef,
+                        )
+                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                        v_loss = 0.5 * v_loss_max.mean()
+                    else:
+                        v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    
+                    loss += v_loss * args.vf_coef # Adiciona a perda do valor se não for removida
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss #+ v_loss * args.vf_coef
+                loss += pg_loss - args.ent_coef * entropy_loss # Sempre adiciona a perda da política e entropia
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -314,19 +361,22 @@ if __name__ == "__main__":
             if args.target_kl is not None and approx_kl > args.target_kl:
                 break
 
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+        # Logging condicional para value_loss e explained_variance
+        if not args.remove_value_loss:
+            y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+            var_y = np.var(y_true)
+            explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+
+            writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+            writer.add_scalar("losses/explained_variance", explained_var, global_step)
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
         writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
         writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
         writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
