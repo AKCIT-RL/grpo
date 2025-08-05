@@ -3,17 +3,19 @@ import os
 import random
 import time
 import argparse
-from utils.rename_wandb import generate_new_name
-
 
 import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import yaml 
+from utils.rename_wandb import generate_new_name 
+from functions import drop_critic_mc, drop_critic_gae, mc_critic, gae_critic
 
 from stable_baselines3.common.atari_wrappers import (  # isort:skip
     ClipRewardEnv,
@@ -22,12 +24,6 @@ from stable_baselines3.common.atari_wrappers import (  # isort:skip
     MaxAndSkipEnv,
     NoopResetEnv,
 )
-
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-import yaml 
-from utils.rename_wandb import generate_new_name 
-from functions import drop_critic_mc, drop_critic_gae, mc_critic, gae_critic
 
 
 def add_args(parser):
@@ -43,7 +39,7 @@ def add_args(parser):
     #General settings
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
                         help="the name of this experiment")
-    parser.add_argument("--algo-name", type=str, default="ppo",
+    parser.add_argument("--algo-name", type=str, default="ppo_atari",
                         help="The name of the algorithm to use")
     parser.add_argument("--seed", type=int, default=1,
                         help="seed of the experiment")
@@ -61,9 +57,9 @@ def add_args(parser):
                         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Env parameters
-    parser.add_argument("--env-id", type=str, default="CartPole-v1",
+    parser.add_argument("--env-id", type=str, default="BreakoutNoFrameskip-v4",
                         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=500000,
+    parser.add_argument("--total-timesteps", type=int, default=10000000,
                         help="total timesteps of the experiments")
     parser.add_argument("--num-envs", type=int, default=4,
                         help="the number of parallel game environments")

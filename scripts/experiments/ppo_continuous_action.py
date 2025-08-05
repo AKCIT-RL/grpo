@@ -1,4 +1,4 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
+# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_continuous_actionpy
 import os
 import random
 import time
@@ -31,7 +31,7 @@ def add_args(parser):
     #General settings
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
                         help="the name of this experiment")
-    parser.add_argument("--algo-name", type=str, default="ppo",
+    parser.add_argument("--algo-name", type=str, default="ppo_continuous_action",
                         help="The name of the algorithm to use")
     parser.add_argument("--seed", type=int, default=1,
                         help="seed of the experiment")
@@ -49,9 +49,9 @@ def add_args(parser):
                         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Env parameters
-    parser.add_argument("--env-id", type=str, default="CartPole-v1",
+    parser.add_argument("--env-id", type=str, default="HalfCheetah-v4",
                         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=500000,
+    parser.add_argument("--total-timesteps", type=int, default=10000000,
                         help="total timesteps of the experiments")
     parser.add_argument("--num-envs", type=int, default=4,
                         help="the number of parallel game environments")
