@@ -15,6 +15,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import yaml 
 from utils.rename_wandb import generate_new_name 
+from functions import drop_critic_mc, drop_critic_gae, mc_critic, gae_critic
 
 
 def add_args(parser):
@@ -25,6 +26,7 @@ def add_args(parser):
     parser.add_argument("--grpo-kmeans", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--grpo-group-std", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--entropy", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-gae", type=bool, action=argparse.BooleanOptionalAction, default=False)
 
     #General settings
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
@@ -239,7 +241,6 @@ if __name__ == "__main__":
             reference_agent.eval()
 
         if args.grpo_kmeans:
-
             initial_observations = np.zeros((args.num_envs,) + envs.single_observation_space.shape)
 
         for step in range(0, args.num_steps):
@@ -276,40 +277,39 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            if args.drop_critic or args.grpo_group or args.grpo_kmeans:
-                returns = torch.zeros_like(rewards).to(device)
-                for env_idx in range(args.num_envs):
-                    current_return = 0
-                    for t in reversed(range(args.num_steps)):
-                        current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
-                        returns[t, env_idx] = current_return
-                
-                flat_returns_for_normalization = returns.view(-1)
+            #MC Returns
+            returns = torch.zeros_like(rewards).to(device)
+            for env_idx in range(args.num_envs):
+                current_return = 0
+                for t in reversed(range(args.num_steps)):
+                    current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
+                    returns[t, env_idx] = current_return
+            
+            if args.drop_critic and not (args.grpo_kmeans):
+                if args.use_gae:
+                    advantages, flat_returns_for_normalization, returns = drop_critic_gae(rewards, device, args, dones, next_done, returns)
 
-                mean_returns_batch = flat_returns_for_normalization.mean()
-                std_returns_batch = flat_returns_for_normalization.std() + 1e-8
-                advantages = (returns - mean_returns_batch)
-
-                if args.grpo_group_std:
-                    advantages = advantages / std_returns_batch
-
-                if args.grpo_group or args.grpo_kmeans:
-                    b_logprobs_ref = logprobs_ref.reshape(-1)
+                else:
+                    advantages, flat_returns_for_normalization = drop_critic_mc(returns)
 
             else:
-                next_value = agent.get_value(next_obs).reshape(1, -1)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
-                for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = values[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + values
+                if args.use_gae:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = gae_critic(next_value, rewards, 
+                                                                                     device, args, dones, values, next_done)
+                else:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = mc_critic(next_value, rewards, device, args, 
+                                                                                    dones, values, next_done, returns)
+
+            if args.grpo_group_std:
+                std_returns_batch = flat_returns_for_normalization.std() + 1e-8
+                advantages = advantages / std_returns_batch
+
+            if args.grpo_group or args.grpo_kmeans:
+                b_logprobs_ref = logprobs_ref.reshape(-1)
 
         if args.grpo_kmeans:
             scaler = StandardScaler()
@@ -317,9 +317,7 @@ if __name__ == "__main__":
 
             kmeans = KMeans(n_clusters=args.k_groups, random_state=args.seed, n_init=10) 
             cluster_labels = kmeans.fit_predict(scaled_initial_observations)
-            
-            advantages = torch.zeros_like(logprobs).to(device)
-            
+                        
             for cluster_id in range(args.k_groups):
                 env_indices_in_cluster = np.where(cluster_labels == cluster_id)[0]
                 
@@ -334,16 +332,37 @@ if __name__ == "__main__":
                     for env_idx_in_cluster in env_indices_in_cluster:
                         advantages[:, env_idx_in_cluster] = 0.0
                     continue
-                
-                cluster_mean_return_per_step = cluster_returns_per_step_flat.mean()
-                cluster_std_return_per_step = cluster_returns_per_step_flat.std() + 1e-8 
-                
-                cluster_advantages_flat = (cluster_returns_per_step_flat - cluster_mean_return_per_step) / cluster_std_return_per_step
-                
-                cluster_advantages_reshaped = cluster_advantages_flat.reshape(args.num_steps, len(env_indices_in_cluster))
 
+                if args.drop_critic:
+                    if args.use_gae:
+                        cluster_advantages, _, _ = drop_critic_gae(rewards[:, env_indices_in_cluster], 
+                                                                   device, args, dones[:, env_indices_in_cluster], next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
+                    else:
+                        cluster_advantages = drop_critic_mc(returns[:, env_indices_in_cluster])
+
+                else:
+                    if args.use_gae:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = gae_critic(next_value, rewards[:, env_indices_in_cluster], 
+                                                                                        device, args, dones[:, env_indices_in_cluster], 
+                                                                                        values[:, env_indices_in_cluster], next_done[env_indices_in_cluster])
+                    else:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = mc_critic(next_value, rewards[:, env_indices_in_cluster], device, args, 
+                                                                                        dones[:, env_indices_in_cluster], values[:, env_indices_in_cluster], 
+                                                                                        next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
+                if args.grpo_group_std:
+                    cluster_std_returns_batch = cluster_returns_per_step_flat.std() + 1e-8
+                    cluster_advantages = cluster_advantages / cluster_std_returns_batch
+                
                 for i, env_idx_in_cluster in enumerate(env_indices_in_cluster):
-                    advantages[:, env_idx_in_cluster] = cluster_advantages_reshaped[:, i]
+                    advantages[:, env_idx_in_cluster] = cluster_advantages[:, i]
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)

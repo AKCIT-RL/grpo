@@ -1,46 +1,37 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_continuous_actionpy
+# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 import os
 import random
 import time
-import argparse 
+import argparse
 
 import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions.normal import Normal 
+from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler 
+from sklearn.preprocessing import StandardScaler
 import yaml 
-from utils.rename_wandb import generate_new_name
+from utils.rename_wandb import generate_new_name 
+from functions import drop_critic_mc, drop_critic_gae, mc_critic, gae_critic
 
 
 def add_args(parser):
     # GRPO flags
-    parser.add_argument("--remove-value-loss", type=bool, action=argparse.BooleanOptionalAction, default=False,
-                        help="If toggled, removes the value loss from the total loss calculation.")
-    parser.add_argument("--drop-critic", type=bool, action=argparse.BooleanOptionalAction, default=False,
-                        help="If toggled, the GAE calculation will use mean rewards instead of critic values.")
-    parser.add_argument("--grpo-group", type=bool, action=argparse.BooleanOptionalAction, default=False,
-                        help="If toggled, enables GRPO-like grouping logic for advantages and KL penalty.")
-    parser.add_argument("--grpo-kmeans", type=bool, action=argparse.BooleanOptionalAction, default=False,
-                        help="If toggled, uses K-Means to group environments for GRPO advantages.")
-    parser.add_argument("--grpo-group-std", type=bool, action=argparse.BooleanOptionalAction, default=False,
-                        help="If toggled, normalizes GRPO advantages by group standard deviation.")
-    parser.add_argument("--entropy", type=bool, action=argparse.BooleanOptionalAction, default=True,
-                        help="If toggled, includes entropy loss in the total loss.")
-    parser.add_argument("--k-groups", type=int, default=3,
-                        help="The number of groups (clusters) for K-Means when grpo-kmeans is enabled.")
-    parser.add_argument("--kl-beta-coef", type=float, default=0.04,
-                        help="Coefficient for the additional KL divergence penalty term.")
+    parser.add_argument("--remove-value-loss", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--drop-critic", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grpo-group", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grpo-kmeans", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grpo-group-std", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--entropy", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-gae", type=bool, action=argparse.BooleanOptionalAction, default=False)
 
-
-    # General settings
+    #General settings
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
                         help="the name of this experiment")
-    parser.add_argument("--algo-name", type=str, default="ppo_continuous_action",
+    parser.add_argument("--algo-name", type=str, default="ppo",
                         help="The name of the algorithm to use")
     parser.add_argument("--seed", type=int, default=1,
                         help="seed of the experiment")
@@ -56,23 +47,19 @@ def add_args(parser):
                         help="the entity (team) of wandb's project")
     parser.add_argument("--capture-video", type=bool, default=False, action=argparse.BooleanOptionalAction,
                         help="whether to capture videos of the agent performances (check out `videos` folder)")
-    parser.add_argument("--save-model", type=bool, default=False, action=argparse.BooleanOptionalAction,
-                        help="whether to save model into the `runs/{run_name}` folder")
-    parser.add_argument("--upload-model", type=bool, default=False, action=argparse.BooleanOptionalAction,
-                        help="whether to upload the saved model to huggingface")
-    parser.add_argument("--hf-entity", type=str, default="",
-                        help="the user or org name of the model repository from the Hugging Face Hub")
 
-    # Algorithm specific arguments
-    parser.add_argument("--env-id", type=str, default="HalfCheetah-v4",
+    # Env parameters
+    parser.add_argument("--env-id", type=str, default="CartPole-v1",
                         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=1000000,
+    parser.add_argument("--total-timesteps", type=int, default=500000,
                         help="total timesteps of the experiments")
-    parser.add_argument("--learning-rate", type=float, default=3e-4,
-                        help="the learning rate of the optimizer")
-    parser.add_argument("--num-envs", type=int, default=1,
+    parser.add_argument("--num-envs", type=int, default=4,
                         help="the number of parallel game environments")
-    parser.add_argument("--num-steps", type=int, default=2048,
+
+
+    parser.add_argument("--learning-rate", type=float, default=2.5e-4,
+                        help="the learning rate of the optimizer")
+    parser.add_argument("--num-steps", type=int, default=128,
                         help="the number of steps to run in each environment per policy rollout")
     parser.add_argument("--anneal-lr", type=bool, default=True, action=argparse.BooleanOptionalAction,
                         help="Toggle learning rate annealing for policy and value networks")
@@ -80,9 +67,9 @@ def add_args(parser):
                         help="the discount factor gamma")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
                         help="the lambda for the general advantage estimation")
-    parser.add_argument("--num-minibatches", type=int, default=32,
+    parser.add_argument("--num-minibatches", type=int, default=4,
                         help="the number of mini-batches")
-    parser.add_argument("--update-epochs", type=int, default=10,
+    parser.add_argument("--update-epochs", type=int, default=4,
                         help="the K epochs to update the policy")
     parser.add_argument("--norm-adv", type=bool, default=True, action=argparse.BooleanOptionalAction,
                         help="Toggles advantages normalization")
@@ -90,20 +77,24 @@ def add_args(parser):
                         help="the surrogate clipping coefficient")
     parser.add_argument("--clip-vloss", type=bool, default=True, action=argparse.BooleanOptionalAction,
                         help="Toggles whether or not to use a clipped loss for the value function, as per the paper.")
-    parser.add_argument("--ent-coef", type=float, default=0.0,
+    parser.add_argument("--ent-coef", type=float, default=0.01,
                         help="coefficient of the entropy")
     parser.add_argument("--vf-coef", type=float, default=0.5,
                         help="coefficient of the value function")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
                         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
+                        help="the target KL divergence threshold") 
+    parser.add_argument("--k-groups", type=float, default=3,
+                        help="the target KL divergence threshold")
+    parser.add_argument("--kl-beta-coef", type=float, default=0.04,
                         help="the target KL divergence threshold")
     parser.add_argument("--config", type=str, default="config.yaml",
                         help="Path to the YAML configuration file.")
 
     # to be filled in runtime
-    parser.add_argument("--batch-size", type=int, default=0, help="the batch size (computed in runtime)")
-    parser.add_argument("--minibatch-size", type=int, default=0, help="the mini-batch size (computed in runtime)")
+    parser.add_argument("--batch-size", type=int, default=0, help="the batch size (computed in runtime: num_envs * num_steps)")
+    parser.add_argument("--minibatch-size", type=int, default=0, help="the mini-batch size (computed in runtime: batch_size // num_minibatches)")
     parser.add_argument("--num-iterations", type=int, default=0, help="the number of iterations (computed in runtime)")
 
 
@@ -169,9 +160,7 @@ if __name__ == "__main__":
     add_args(parser) 
 
     temp_args, remaining_argv = parser.parse_known_args()
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_file_path = os.path.join(script_dir, temp_args.config)
+    config_file_path = temp_args.config
 
     yaml_config = {} 
     if os.path.exists(config_file_path):
@@ -297,40 +286,39 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            if args.drop_critic or args.grpo_group or args.grpo_kmeans:
-                returns = torch.zeros_like(rewards).to(device)
-                for env_idx in range(args.num_envs):
-                    current_return = 0
-                    for t in reversed(range(args.num_steps)):
-                        current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
-                        returns[t, env_idx] = current_return
-                
-                flat_returns_for_normalization = returns.view(-1)
+            #MC Returns
+            returns = torch.zeros_like(rewards).to(device)
+            for env_idx in range(args.num_envs):
+                current_return = 0
+                for t in reversed(range(args.num_steps)):
+                    current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
+                    returns[t, env_idx] = current_return
+            
+            if args.drop_critic and not (args.grpo_kmeans):
+                if args.use_gae:
+                    advantages, flat_returns_for_normalization, returns = drop_critic_gae(rewards, device, args, dones, next_done, returns)
 
-                mean_returns_batch = flat_returns_for_normalization.mean()
-                std_returns_batch = flat_returns_for_normalization.std() + 1e-8
-                advantages = (returns - mean_returns_batch)
-
-                if args.grpo_group_std:
-                    advantages = advantages / std_returns_batch
-
-                if args.grpo_group or args.grpo_kmeans:
-                    b_logprobs_ref = logprobs_ref.reshape(-1)
+                else:
+                    advantages, flat_returns_for_normalization = drop_critic_mc(returns)
 
             else:
-                next_value = agent.get_value(next_obs).reshape(1, -1)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
-                for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = values[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + values
+                if args.use_gae:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = gae_critic(next_value, rewards, 
+                                                                                     device, args, dones, values, next_done)
+                else:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = mc_critic(next_value, rewards, device, args, 
+                                                                                    dones, values, next_done, returns)
+
+            if args.grpo_group_std:
+                std_returns_batch = flat_returns_for_normalization.std() + 1e-8
+                advantages = advantages / std_returns_batch
+
+            if args.grpo_group or args.grpo_kmeans:
+                b_logprobs_ref = logprobs_ref.reshape(-1)
 
         if args.grpo_kmeans:
             scaler = StandardScaler()
@@ -338,9 +326,7 @@ if __name__ == "__main__":
 
             kmeans = KMeans(n_clusters=args.k_groups, random_state=args.seed, n_init=10) 
             cluster_labels = kmeans.fit_predict(scaled_initial_observations)
-            
-            advantages = torch.zeros_like(logprobs).to(device)
-            
+                        
             for cluster_id in range(args.k_groups):
                 env_indices_in_cluster = np.where(cluster_labels == cluster_id)[0]
                 
@@ -355,16 +341,37 @@ if __name__ == "__main__":
                     for env_idx_in_cluster in env_indices_in_cluster:
                         advantages[:, env_idx_in_cluster] = 0.0
                     continue
-                
-                cluster_mean_return_per_step = cluster_returns_per_step_flat.mean()
-                cluster_std_return_per_step = cluster_returns_per_step_flat.std() + 1e-8 
-                
-                cluster_advantages_flat = (cluster_returns_per_step_flat - cluster_mean_return_per_step) / cluster_std_return_per_step
-                
-                cluster_advantages_reshaped = cluster_advantages_flat.reshape(args.num_steps, len(env_indices_in_cluster))
 
+                if args.drop_critic:
+                    if args.use_gae:
+                        cluster_advantages, _, _ = drop_critic_gae(rewards[:, env_indices_in_cluster], 
+                                                                   device, args, dones[:, env_indices_in_cluster], next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
+                    else:
+                        cluster_advantages = drop_critic_mc(returns[:, env_indices_in_cluster])
+
+                else:
+                    if args.use_gae:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = gae_critic(next_value, rewards[:, env_indices_in_cluster], 
+                                                                                        device, args, dones[:, env_indices_in_cluster], 
+                                                                                        values[:, env_indices_in_cluster], next_done[env_indices_in_cluster])
+                    else:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = mc_critic(next_value, rewards[:, env_indices_in_cluster], device, args, 
+                                                                                        dones[:, env_indices_in_cluster], values[:, env_indices_in_cluster], 
+                                                                                        next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
+                if args.grpo_group_std:
+                    cluster_std_returns_batch = cluster_returns_per_step_flat.std() + 1e-8
+                    cluster_advantages = cluster_advantages / cluster_std_returns_batch
+                
                 for i, env_idx_in_cluster in enumerate(env_indices_in_cluster):
-                    advantages[:, env_idx_in_cluster] = cluster_advantages_reshaped[:, i]
+                    advantages[:, env_idx_in_cluster] = cluster_advantages[:, i]
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -383,7 +390,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -402,8 +409,8 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss 
-                loss = 0 
+                # Value loss
+                loss = 0
                 if args.grpo_group or args.grpo_kmeans:
                     log_ratio_ref_to_new = b_logprobs_ref[mb_inds] - newlogprob
                     ratio_ref_to_new = log_ratio_ref_to_new.exp()
@@ -431,7 +438,7 @@ if __name__ == "__main__":
                     else:
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
-                    loss += v_loss * args.vf_coef 
+                    loss += v_loss * args.vf_coef
 
                 loss += pg_loss
 
@@ -462,32 +469,6 @@ if __name__ == "__main__":
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-
-    if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
-        torch.save(agent.state_dict(), model_path)
-        print(f"model saved to {model_path}")
-        from cleanrl_utils.evals.ppo_eval import evaluate
-
-        episodic_returns = evaluate(
-            model_path,
-            make_env,
-            args.env_id,
-            eval_episodes=10,
-            run_name=f"{run_name}-eval",
-            Model=Agent,
-            device=device,
-            gamma=args.gamma,
-        )
-        for idx, episodic_return in enumerate(episodic_returns):
-            writer.add_scalar("eval/episodic_return", episodic_return, idx)
-
-        if args.upload_model:
-            from cleanrl_utils.huggingface import push_to_hub
-
-            repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
-            repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-            push_to_hub(args, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     envs.close()
     writer.close()
