@@ -210,3 +210,4 @@ __marimo__/
 *wandb
 scripts/experiments/drop_critic
 scripts/experiments/remove_value_loss
+scripts/experiments/ppo_test.py

@@ -11,14 +11,22 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 import yaml 
 from utils.rename_wandb import generate_new_name 
+from functions import drop_critic_mc, drop_critic_gae, mc_critic, gae_critic
+
 
 def add_args(parser):
     # GRPO flags
     parser.add_argument("--remove-value-loss", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--drop-critic", type=bool, action=argparse.BooleanOptionalAction, default=False)
-
+    parser.add_argument("--grpo-group", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grpo-kmeans", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grpo-group-std", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--entropy", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-gae", type=bool, action=argparse.BooleanOptionalAction, default=False)
 
     #General settings
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__)[: -len(".py")],
@@ -76,6 +84,10 @@ def add_args(parser):
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
                         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
+                        help="the target KL divergence threshold") 
+    parser.add_argument("--k-groups", type=float, default=3,
+                        help="the target KL divergence threshold")
+    parser.add_argument("--kl-beta-coef", type=float, default=0.04,
                         help="the target KL divergence threshold")
     parser.add_argument("--config", type=str, default="config.yaml",
                         help="Path to the YAML configuration file.")
@@ -198,6 +210,10 @@ if __name__ == "__main__":
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
+    if args.grpo_group or args.grpo_kmeans:
+        reference_agent = Agent(envs).to(device)
+        logprobs_ref = torch.zeros((args.num_steps, args.num_envs)).to(device)
+
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
@@ -220,7 +236,17 @@ if __name__ == "__main__":
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
+        if args.grpo_group or args.grpo_kmeans:
+            reference_agent.load_state_dict(agent.state_dict())
+            reference_agent.eval()
+
+        if args.grpo_kmeans:
+            initial_observations = np.zeros((args.num_envs,) + envs.single_observation_space.shape)
+
         for step in range(0, args.num_steps):
+            if args.grpo_kmeans and step == 0:
+                initial_observations = next_obs.cpu().numpy()
+
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -228,9 +254,13 @@ if __name__ == "__main__":
             # ALGO LOGIC: action logic
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
+                if args.grpo_group or args.grpo_kmeans:
+                    _, logprob_ref, _, _ = reference_agent.get_action_and_value(next_obs)
+                    logprobs_ref[step] = logprob_ref
                 values[step] = value.flatten()
+
             actions[step] = action
-            logprobs[step] = logprob
+            logprobs[step] = logprob                
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
@@ -247,36 +277,92 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            if args.drop_critic:
-                rewards_mean = torch.mean(rewards, dim=1)
-                next_value = rewards_mean[-1].unsqueeze(dim=-1).unsqueeze(dim=-1)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
+            #MC Returns
+            returns = torch.zeros_like(rewards).to(device)
+            for env_idx in range(args.num_envs):
+                current_return = 0
                 for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = (rewards_mean.unsqueeze(1))[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - (rewards_mean.unsqueeze(1))[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + rewards_mean.unsqueeze(1)
+                    current_return = rewards[t, env_idx] + args.gamma * current_return * (1.0 - dones[t, env_idx])
+                    returns[t, env_idx] = current_return
+            
+            if args.drop_critic and not (args.grpo_kmeans):
+                if args.use_gae:
+                    advantages, flat_returns_for_normalization, returns = drop_critic_gae(rewards, device, args, dones, next_done, returns)
+
+                else:
+                    advantages, flat_returns_for_normalization = drop_critic_mc(returns)
 
             else:
-                next_value = agent.get_value(next_obs).reshape(1, -1)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
-                for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
+                if args.use_gae:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = gae_critic(next_value, rewards, 
+                                                                                     device, args, dones, values, next_done)
+                else:
+                    with torch.no_grad():
+                        next_value = agent.get_value(next_obs).reshape(1, -1)
+                    advantages, flat_returns_for_normalization, returns = mc_critic(next_value, rewards, device, args, 
+                                                                                    dones, values, next_done, returns)
+
+            if args.grpo_group_std:
+                std_returns_batch = flat_returns_for_normalization.std() + 1e-8
+                advantages = advantages / std_returns_batch
+
+            if args.grpo_group or args.grpo_kmeans:
+                b_logprobs_ref = logprobs_ref.reshape(-1)
+
+        if args.grpo_kmeans:
+            scaler = StandardScaler()
+            scaled_initial_observations = scaler.fit_transform(initial_observations.reshape(args.num_envs, -1))
+
+            kmeans = KMeans(n_clusters=args.k_groups, random_state=args.seed, n_init=10) 
+            cluster_labels = kmeans.fit_predict(scaled_initial_observations)
+                        
+            for cluster_id in range(args.k_groups):
+                env_indices_in_cluster = np.where(cluster_labels == cluster_id)[0]
+                
+                if len(env_indices_in_cluster) == 0:
+                    continue 
+                
+                cluster_returns_per_step = returns[:, env_indices_in_cluster]
+                
+                cluster_returns_per_step_flat = cluster_returns_per_step.reshape(-1)
+
+                if cluster_returns_per_step_flat.numel() < 2:
+                    for env_idx_in_cluster in env_indices_in_cluster:
+                        advantages[:, env_idx_in_cluster] = 0.0
+                    continue
+
+                if args.drop_critic:
+                    if args.use_gae:
+                        cluster_advantages, _, _ = drop_critic_gae(rewards[:, env_indices_in_cluster], 
+                                                                   device, args, dones[:, env_indices_in_cluster], next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
                     else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = values[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + values
+                        cluster_advantages = drop_critic_mc(returns[:, env_indices_in_cluster])
+
+                else:
+                    if args.use_gae:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = gae_critic(next_value, rewards[:, env_indices_in_cluster], 
+                                                                                        device, args, dones[:, env_indices_in_cluster], 
+                                                                                        values[:, env_indices_in_cluster], next_done[env_indices_in_cluster])
+                    else:
+                        with torch.no_grad():
+                            next_value = agent.get_value(next_obs).reshape(1, -1)
+                        next_value = next_value[:, env_indices_in_cluster]
+                        cluster_advantages, _, _ = mc_critic(next_value, rewards[:, env_indices_in_cluster], device, args, 
+                                                                                        dones[:, env_indices_in_cluster], values[:, env_indices_in_cluster], 
+                                                                                        next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+
+                if args.grpo_group_std:
+                    cluster_std_returns_batch = cluster_returns_per_step_flat.std() + 1e-8
+                    cluster_advantages = cluster_advantages / cluster_std_returns_batch
+                
+                for i, env_idx_in_cluster in enumerate(env_indices_in_cluster):
+                    advantages[:, env_idx_in_cluster] = cluster_advantages[:, i]
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -306,7 +392,7 @@ if __name__ == "__main__":
                     clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
 
                 mb_advantages = b_advantages[mb_inds]
-                if args.norm_adv:
+                if args.norm_adv: 
                     mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
                 # Policy loss
@@ -316,6 +402,18 @@ if __name__ == "__main__":
 
                 # Value loss
                 loss = 0
+                if args.grpo_group or args.grpo_kmeans:
+                    log_ratio_ref_to_new = b_logprobs_ref[mb_inds] - newlogprob
+                    ratio_ref_to_new = log_ratio_ref_to_new.exp()
+                    
+                    kl_penalty_term = (ratio_ref_to_new - log_ratio_ref_to_new - 1).mean()
+                    
+                    loss += args.kl_beta_coef * kl_penalty_term
+
+                if args.entropy:
+                    entropy_loss = entropy.mean()
+                    loss -= args.ent_coef * entropy_loss.mean()
+                    
                 if not args.remove_value_loss:
                     newvalue = newvalue.view(-1)
                     if args.clip_vloss:
@@ -333,8 +431,7 @@ if __name__ == "__main__":
 
                     loss += v_loss * args.vf_coef
 
-                entropy_loss = entropy.mean()
-                loss += pg_loss - args.ent_coef * entropy_loss
+                loss += pg_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -352,10 +449,12 @@ if __name__ == "__main__":
             writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
             writer.add_scalar("losses/explained_variance", explained_var, global_step)
 
+        if args.entropy:
+            writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
         writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
