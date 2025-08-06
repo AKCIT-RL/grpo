@@ -169,7 +169,7 @@ if __name__ == "__main__":
         if yaml_config is None: 
             yaml_config = {}
     else:
-        print(f"Aviso: Arquivo de configuração '{config_file_path}' não encontrado. Usando apenas padrões do argparse e argumentos de linha de comando.")
+        print(config_file_path,f"Aviso: Arquivo de configuração '{config_file_path}' não encontrado. Usando apenas padrões do argparse e argumentos de linha de comando.")
 
     for key, value in yaml_config.items():
         attr_name = key.replace('-', '_')
@@ -274,7 +274,7 @@ if __name__ == "__main__":
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            rewards[step] = torch.tensor(reward,dtype=torch.float32).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
             if "final_info" in infos:

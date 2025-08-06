@@ -4,7 +4,7 @@ def drop_critic_mc(returns):
     flat_returns_for_normalization = returns.view(-1)
     mean_returns_batch = flat_returns_for_normalization.mean()
     advantages = (returns - mean_returns_batch)
-    return advantages
+    return advantages, flat_returns_for_normalization
 
 def drop_critic_gae(rewards, device, args, dones, next_done, returns):
     next_value = returns[-1].unsqueeze(0)
