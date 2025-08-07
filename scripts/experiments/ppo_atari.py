@@ -319,7 +319,7 @@ if __name__ == "__main__":
                     with torch.no_grad():
                         next_value = agent.get_value(next_obs).reshape(1, -1)
                     advantages, flat_returns_for_normalization, returns = mc_critic(next_value, rewards, device, args, 
-                                                                                    dones, values, next_done, returns)
+                                                                                    dones, values, next_done)
 
             if args.grpo_group_std:
                 std_returns_batch = flat_returns_for_normalization.std() + 1e-8
@@ -372,7 +372,7 @@ if __name__ == "__main__":
                         next_value = next_value[:, env_indices_in_cluster]
                         cluster_advantages, _, _ = mc_critic(next_value, rewards[:, env_indices_in_cluster], device, args, 
                                                                                         dones[:, env_indices_in_cluster], values[:, env_indices_in_cluster], 
-                                                                                        next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
+                                                                                        next_done[env_indices_in_cluster])
 
                 if args.grpo_group_std:
                     cluster_std_returns_batch = cluster_returns_per_step_flat.std() + 1e-8
