@@ -306,7 +306,7 @@ if __name__ == "__main__":
                     with torch.no_grad():
                         next_value = agent.get_value(next_obs).reshape(1, -1)
                     advantages, flat_returns_for_normalization, returns = mc_critic(next_value, rewards, device, args, 
-                                                                                    dones, values, next_done, returns)
+                                                                                    dones, values, next_done)
 
             if args.grpo_group_std:
                 std_returns_batch = flat_returns_for_normalization.std() + 1e-8
@@ -314,7 +314,7 @@ if __name__ == "__main__":
 
             if args.grpo_group or args.grpo_kmeans:
                 b_logprobs_ref = logprobs_ref.reshape(-1)
-
+        
         if args.grpo_kmeans:
             scaler = StandardScaler()
             scaled_initial_observations = scaler.fit_transform(initial_observations.reshape(args.num_envs, -1))
