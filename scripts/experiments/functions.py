@@ -1,9 +1,11 @@
 import torch
 
-def drop_critic_mc(returns):
+def drop_critic_mc(returns, args):
     flat_returns_for_normalization = returns.view(-1)
     mean_returns_batch = flat_returns_for_normalization.mean()
     advantages = (returns - mean_returns_batch)
+    if args.drop_baseline:
+        advantages = returns
     return advantages, flat_returns_for_normalization
 
 def drop_critic_gae(rewards, device, args, dones, next_done, returns):
@@ -35,6 +37,8 @@ def mc_critic(next_value,rewards, device, args, dones, values, next_done):
         else:
             returns[t] = rewards[t] + args.gamma * returns[t + 1] * (1.0 - dones[t + 1])
     advantages = returns - values
+    if args.drop_baseline:
+        advantages = returns
     flat_returns_for_normalization = returns.view(-1)
     return advantages, flat_returns_for_normalization, returns
 

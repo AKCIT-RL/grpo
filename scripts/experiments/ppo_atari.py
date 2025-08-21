@@ -30,6 +30,7 @@ def add_args(parser):
     # GRPO flags
     parser.add_argument("--remove-value-loss", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--drop-critic", type=bool, action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--drop-baseline", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--grpo-group", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--grpo-kmeans", type=bool, action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--grpo-group-std", type=bool, action=argparse.BooleanOptionalAction, default=False)
@@ -307,7 +308,7 @@ if __name__ == "__main__":
                     advantages, flat_returns_for_normalization, returns = drop_critic_gae(rewards, device, args, dones, next_done, returns)
 
                 else:
-                    advantages, flat_returns_for_normalization = drop_critic_mc(returns)
+                    advantages, flat_returns_for_normalization = drop_critic_mc(returns,args)
 
             else:
                 if args.use_gae:
@@ -356,7 +357,7 @@ if __name__ == "__main__":
                                                                    device, args, dones[:, env_indices_in_cluster], next_done[env_indices_in_cluster], returns[:, env_indices_in_cluster])
 
                     else:
-                        cluster_advantages = drop_critic_mc(returns[:, env_indices_in_cluster])
+                        cluster_advantages = drop_critic_mc(returns[:, env_indices_in_cluster], args)
 
                 else:
                     if args.use_gae:
