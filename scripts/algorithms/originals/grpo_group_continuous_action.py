@@ -11,6 +11,8 @@ import torch.optim as optim
 import tyro
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
+from utils.rename_wandb import generate_new_name 
+
 
 
 @dataclass
@@ -31,6 +33,7 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    algo_name: str = "grpo_group_continuous"
     
     # Algorithm specific arguments
     env_id: str = "HalfCheetah-v4"
@@ -63,6 +66,9 @@ class Args:
     """the target KL divergence threshold"""
     kl_beta_coef: float = 0.04
     """Coefficient Beta for the KL regularization term in GRPO loss"""
+    use_entropy: bool = True
+    use_baseline: bool=True
+
 
     # to be filled in runtime
     batch_size: int = 0
@@ -126,6 +132,9 @@ if __name__ == "__main__":
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+
+    group_name, run_name = generate_new_name(vars(args))
+    
     if args.track:
         import wandb
 
@@ -137,7 +146,7 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            group=f"continuous_group_{args.env_id}__{args.exp_name}", 
+            group=group_name, 
         )
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
@@ -231,8 +240,11 @@ if __name__ == "__main__":
         mean_returns_batch = flat_returns.mean() 
         std_returns_batch = flat_returns.std() + 1e-8 
 
-        advantages = (returns - mean_returns_batch) / std_returns_batch 
-        b_advantages = advantages.reshape(-1) 
+        if args.use_baseline:
+            advantages_grpo = (returns - mean_returns_batch) / std_returns_batch
+        else:
+            advantages_grpo = returns 
+        b_advantages = advantages_grpo.reshape(-1) 
 
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
@@ -269,7 +281,10 @@ if __name__ == "__main__":
                 
                 kl_penalty_term = (ratio_ref_to_new - log_ratio_ref_to_new - 1).mean()
                 
-                loss = pg_loss - args.ent_coef * entropy.mean() + args.kl_beta_coef * kl_penalty_term
+                loss = pg_loss + args.kl_beta_coef * kl_penalty_term
+
+                if args.use_entropy:
+                    loss = loss - args.ent_coef * entropy.mean()
                 
                 optimizer.zero_grad()
                 loss.backward()
