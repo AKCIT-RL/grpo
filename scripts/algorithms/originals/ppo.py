@@ -17,11 +17,6 @@ from utils.rename_wandb import generate_new_name
 
 @dataclass
 class Args:
-    #flags
-    monte_carlo_returns: bool = False
-    use_baseline: bool = False
-    """"""
-
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     algo_name: str = "ppo"
@@ -226,32 +221,19 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            if args.monte_carlo_returns:
-                returns = torch.zeros_like(rewards).to(device)
-                R = agent.get_value(next_obs).reshape(1, -1) * (1.0 - next_done)
-                for t in reversed(range(args.num_steps)):
-                    R = rewards[t] + args.gamma * R * (1.0 - dones[t])
-                    returns[t] = R
-                
-                if args.use_baseline:
-                    advantages = returns - values
+            next_value = agent.get_value(next_obs).reshape(1, -1)
+            advantages = torch.zeros_like(rewards).to(device)
+            lastgaelam = 0
+            for t in reversed(range(args.num_steps)):
+                if t == args.num_steps - 1:
+                    nextnonterminal = 1.0 - next_done
+                    nextvalues = next_value
                 else:
-                    advantages = returns
-
-            else:
-                next_value = agent.get_value(next_obs).reshape(1, -1)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
-                for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = values[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + values
+                    nextnonterminal = 1.0 - dones[t + 1]
+                    nextvalues = values[t + 1]
+                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+            returns = advantages + values
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)

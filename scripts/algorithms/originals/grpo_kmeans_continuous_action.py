@@ -11,6 +11,8 @@ import torch.optim as optim
 import tyro
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
+from utils.rename_wandb import generate_new_name
+
 
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -34,6 +36,7 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    algo_name: str = "grpo_kmeans_continuous"
 
     # Algorithm specific arguments
     env_id: str = "HalfCheetah-v4"
@@ -135,7 +138,7 @@ if __name__ == "__main__":
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size 
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-
+    group_name, run_name = generate_new_name(vars(args))
     if args.track:
         import wandb
 

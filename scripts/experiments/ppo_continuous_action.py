@@ -52,7 +52,7 @@ def add_args(parser):
     # Env parameters
     parser.add_argument("--env-id", type=str, default="HalfCheetah-v4",
                         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=10000000,
+    parser.add_argument("--total-timesteps", type=int, default=1000000,
                         help="total timesteps of the experiments")
     parser.add_argument("--num-envs", type=int, default=4,
                         help="the number of parallel game environments")

@@ -1,8 +1,10 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
+# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_continuous_actionpy
 import os
 import random
 import time
 from dataclasses import dataclass
+from utils.rename_wandb import generate_new_name
+
 
 import gymnasium as gym
 import numpy as np
@@ -10,21 +12,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import tyro
-from torch.distributions.categorical import Categorical
+from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
-from utils.rename_wandb import generate_new_name
 
 
 @dataclass
 class Args:
-    #flags
-    monte_carlo_returns: bool = False
-    use_baseline: bool = False
-    """"""
-
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    algo_name: str = "ppo"
+    algo_name: str = "ppo_continuous_action"
     """The name of the algorithm to use"""
     seed: int = 1
     """seed of the experiment"""
@@ -40,17 +36,23 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    save_model: bool = False
+    """whether to save model into the `runs/{run_name}` folder"""
+    upload_model: bool = False
+    """whether to upload the saved model to huggingface"""
+    hf_entity: str = ""
+    """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "CartPole-v1"
+    env_id: str = "HalfCheetah-v4"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 1000000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 2048
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -58,9 +60,9 @@ class Args:
     """the discount factor gamma"""
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 4
+    num_minibatches: int = 32
     """the number of mini-batches"""
-    update_epochs: int = 4
+    update_epochs: int = 10
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -68,7 +70,7 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
+    ent_coef: float = 0.0
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
@@ -76,6 +78,19 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
+
+    # Flags para alternar entre algoritmos
+    use_reinforce: bool = False
+    """Se ativado, executa o REINFORCE. Desativa o GAE e o PPO clipping."""
+    use_value_function: bool = True
+    """Se ativado, usa uma rede de valor como baseline para REINFORCE."""
+    use_gae: bool = True
+    """Se ativado, usa o Generalized Advantage Estimation."""
+    use_ppo_clipping: bool = True
+    """Se ativado, usa o clipping de perda do PPO."""
+    use_returns_mean_baseline: bool = False
+    """Se ativado, usa a média dos retornos do batch como baseline para REINFORCE."""
+    use_entropy: bool = True
 
     # to be filled in runtime
     batch_size: int = 0
@@ -86,14 +101,20 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, idx, capture_video, run_name):
+def make_env(env_id, idx, capture_video, run_name, gamma):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
+        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
         env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = gym.wrappers.ClipAction(env)
+        env = gym.wrappers.NormalizeObservation(env)
+        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
 
     return thunk
@@ -106,39 +127,57 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, use_value_function):
         super().__init__()
-        self.critic = nn.Sequential(
+        self.use_value_function = use_value_function
+        if self.use_value_function:
+            self.critic = nn.Sequential(
+                layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 64)),
+                nn.Tanh(),
+                layer_init(nn.Linear(64, 1), std=1.0),
+            )
+        self.actor_mean = nn.Sequential(
             layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(64, np.prod(envs.single_action_space.shape)), std=0.01),
         )
-        self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
-        )
+        self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(envs.single_action_space.shape)))
 
     def get_value(self, x):
-        return self.critic(x)
+        if self.use_value_function:
+            return self.critic(x)
+        else:
+            return torch.zeros(x.shape[0], 1).to(x.device)
 
     def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
-        probs = Categorical(logits=logits)
+        action_mean = self.actor_mean(x)
+        action_logstd = self.actor_logstd.expand_as(action_mean)
+        action_std = torch.exp(action_logstd)
+        probs = Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
+        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.get_value(x)
 
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
+    
+    # Configurações para REINFORCE
+    if args.use_reinforce:
+        args.use_returns_mean_baseline = False
+        args.use_gae = False
+        args.use_ppo_clipping = False
+        args.update_epochs = 1
+        args.vf_coef = 0.0 if not args.use_value_function else args.vf_coef
+        
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
     group_name, run_name = generate_new_name(vars(args))
     if args.track:
@@ -170,11 +209,11 @@ if __name__ == "__main__":
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+        [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
     )
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = Agent(envs, args.use_value_function).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
@@ -226,19 +265,7 @@ if __name__ == "__main__":
 
         # bootstrap value if not done
         with torch.no_grad():
-            if args.monte_carlo_returns:
-                returns = torch.zeros_like(rewards).to(device)
-                R = agent.get_value(next_obs).reshape(1, -1) * (1.0 - next_done)
-                for t in reversed(range(args.num_steps)):
-                    R = rewards[t] + args.gamma * R * (1.0 - dones[t])
-                    returns[t] = R
-                
-                if args.use_baseline:
-                    advantages = returns - values
-                else:
-                    advantages = returns
-
-            else:
+            if args.use_gae:
                 next_value = agent.get_value(next_obs).reshape(1, -1)
                 advantages = torch.zeros_like(rewards).to(device)
                 lastgaelam = 0
@@ -252,6 +279,45 @@ if __name__ == "__main__":
                     delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
                     advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
                 returns = advantages + values
+                
+                # Calcula a média e o desvio padrão dos retornos do batch
+                flat_returns = returns.view(-1)
+                returns_mean = flat_returns.mean()
+                returns_std = flat_returns.std() + 1e-8
+                
+                # A vantagem é o retorno menos a média do batch, normalizada
+                advantages = (returns - returns_mean) / returns_std
+            elif args.use_returns_mean_baseline:
+                returns = torch.zeros_like(rewards).to(device)
+                for env in range(args.num_envs):
+                    R = 0
+                    for t in reversed(range(args.num_steps)):
+                        if dones[t, env] == 1.0:
+                            R = 0
+                        R = rewards[t, env] + args.gamma * R
+                        returns[t, env] = R
+                
+                # Calcula a média e o desvio padrão dos retornos do batch
+                flat_returns = returns.view(-1)
+                returns_mean = flat_returns.mean()
+                returns_std = flat_returns.std() + 1e-8
+                
+                # A vantagem é o retorno menos a média do batch, normalizada
+                advantages = (returns - returns_mean) / returns_std
+            else: # REINFORCE com ou sem value function baseline
+                returns = torch.zeros_like(rewards).to(device)
+                for env in range(args.num_envs):
+                    R = 0
+                    for t in reversed(range(args.num_steps)):
+                        if dones[t, env] == 1.0:
+                            R = 0
+                        R = rewards[t, env] + args.gamma * R
+                        returns[t, env] = R
+                
+                if args.use_value_function:
+                    advantages = returns - values
+                else:
+                    advantages = returns
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -270,7 +336,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -285,27 +351,34 @@ if __name__ == "__main__":
                     mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
                 # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
+                if args.use_ppo_clipping:
+                    pg_loss1 = -mb_advantages * ratio
+                    pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
                 else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    pg_loss = (-mb_advantages * newlogprob).mean()
+
+                # Value loss (só se usar a função de valor)
+                v_loss = torch.tensor(0.0).to(device)
+                if args.use_value_function:
+                    newvalue = newvalue.view(-1)
+                    if args.clip_vloss:
+                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                        v_clipped = b_values[mb_inds] + torch.clamp(
+                            newvalue - b_values[mb_inds],
+                            -args.clip_coef,
+                            args.clip_coef,
+                        )
+                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                        v_loss = 0.5 * v_loss_max.mean()
+                    else:
+                        v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss + v_loss * args.vf_coef
+                if args.use_entropy:
+                    loss = loss - args.ent_coef * entropy_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -323,13 +396,40 @@ if __name__ == "__main__":
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
         writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        if args.use_entropy:
+            writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
         writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+
+    if args.save_model:
+        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
+        torch.save(agent.state_dict(), model_path)
+        print(f"model saved to {model_path}")
+        from cleanrl_utils.evals.ppo_eval import evaluate
+
+        episodic_returns = evaluate(
+            model_path,
+            make_env,
+            args.env_id,
+            eval_episodes=10,
+            run_name=f"{run_name}-eval",
+            Model=Agent,
+            device=device,
+            gamma=args.gamma,
+        )
+        for idx, episodic_return in enumerate(episodic_returns):
+            writer.add_scalar("eval/episodic_return", episodic_return, idx)
+
+        if args.upload_model:
+            from cleanrl_utils.huggingface import push_to_hub
+
+            repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
+            repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
+            push_to_hub(args, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     envs.close()
     writer.close()
