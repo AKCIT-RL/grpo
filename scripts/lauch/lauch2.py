@@ -7,7 +7,7 @@ SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 # 2. Lista de nomes dos projetos (algoritmos)
 PROJECT_NAMES = [
     "grpo-no-baseline",
-    "grpo-group",
+    "grpo-group-no-entropy",
 ]
 
 # 4. Lista de ambientes para os experimentos
@@ -32,9 +32,9 @@ for seed in SEEDS:
 
         # 3. Lógica condicional para definir as flags do algoritmo
         if project_name == "grpo-no-baseline":
-            FLAGS_STRING = "--no-use-baseline"
-        elif project_name == "grpo-group":
-            FLAGS_STRING = ""
+            FLAGS_STRING = "--no-use-baseline --no-use-entropy"
+        elif project_name == "grpo-group-no-entropy":
+            FLAGS_STRING = "--no-use-entropy"
         
         for env_name in ENVIRONMENTS:
             # Define o total de timesteps com base no ambiente
