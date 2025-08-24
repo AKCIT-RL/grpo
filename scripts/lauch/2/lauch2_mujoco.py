@@ -12,8 +12,6 @@ PROJECT_NAMES = [
 
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
-    "CartPole-v1",
-    "Acrobot-v1",
     "HalfCheetah-v4"
 ]
 

@@ -6,7 +6,7 @@ SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # 2. Lista de nomes dos projetos (algoritmos)
 PROJECT_NAMES = [
-    "grpo",
+    "ppo-grpo",
 ]
 
 # 4. Lista de ambientes para os experimentos
@@ -29,9 +29,9 @@ for seed in SEEDS:
     for project_name in PROJECT_NAMES:
 
         # 3. Lógica condicional para definir as flags do algoritmo
-        if project_name == "grpo":
+        if project_name == "ppo-grpo":
             FLAGS_STRING = ""
-        elif project_name == "grpo-group-no-entropy":
+        elif project_name == "reinforce-clip-gae":
             FLAGS_STRING = "--no-use-entropy"
         
         for env_name in ENVIRONMENTS:
@@ -42,9 +42,9 @@ for seed in SEEDS:
                 TOTAL_TIMESTEPS = 1000000
 
             if env_name == "HalfCheetah-v4":
-                PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group_continuous_action.py"
+                PYTHON_SCRIPT = "scripts/algorithms/no-baseline/ppo_continuous_action.py"
             else:
-                PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group.py"
+                PYTHON_SCRIPT = "scripts/algorithms/no-baseline/ppo.py"
 
             for num_envs in NUM_ENVS_LIST:
                 command = [

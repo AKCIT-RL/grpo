@@ -6,22 +6,17 @@ SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # 2. Lista de nomes dos projetos (algoritmos)
 PROJECT_NAMES = [
-    "grpo-gamma",
+    "grpo-horizon",
 ]
 
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
-    "CartPole-v1",
-    "Acrobot-v1",
     "HalfCheetah-v4"
 ]
 
 # 5. Lista de número de ambientes para os experimentos
 NUM_ENVS_LIST = [
-    8,
-    16,
-    32,
-    64
+    8
 ]
 
 # Listas de horizonte para ambientes não-Mujoco e Mujoco
@@ -46,8 +41,8 @@ for seed in SEEDS:
     for project_name in PROJECT_NAMES:
 
         # 3. Lógica condicional para definir as flags do algoritmo
-        if project_name == "grpo-gamma":
-            FLAGS_STRING = "--no-use-baseline --no-use-entropy"
+        if project_name == "grpo-horizon":
+            FLAGS_STRING = ""
         elif project_name == "grpo-group-no-entropy":
             FLAGS_STRING = "--no-use-entropy"
         
@@ -71,7 +66,6 @@ for seed in SEEDS:
                         "--seed", str(seed),
                         "--total-timesteps", str(TOTAL_TIMESTEPS),
                         "--num-steps", str(horizon), # Adicionando a flag de horizonte
-                        "--gamma", 1,
                         *FLAGS_STRING.split(),
                         "--track",
                         "--wandb-project-name", project_name

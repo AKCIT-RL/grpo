@@ -6,15 +6,14 @@ SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # 2. Lista de nomes dos projetos (algoritmos)
 PROJECT_NAMES = [
-    "reinforce",
-    "reinforce-clip"
+    "reinforce1",
+    "reinforce-clip1"
 ]
 
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
     "CartPole-v1",
-    "Acrobot-v1",
-    "HalfCheetah-v4"
+    "Acrobot-v1"
 ]
 
 # 5. Lista de número de ambientes para os experimentos
@@ -31,9 +30,9 @@ for seed in SEEDS:
     for project_name in PROJECT_NAMES:
 
         # 3. Lógica condicional para definir as flags do algoritmo
-        if project_name == "reinforce":
+        if project_name == "reinforce1":
             FLAGS_STRING = "--use-reinforce"
-        elif project_name == "reinforce-clip":
+        elif project_name == "reinforce-clip1":
             FLAGS_STRING = "--no-use-value-function --no-use-gae --no-use-entropy"
         
         for env_name in ENVIRONMENTS:
