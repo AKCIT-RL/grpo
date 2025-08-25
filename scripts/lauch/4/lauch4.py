@@ -68,7 +68,7 @@ for seed in SEEDS:
                         "--seed", str(seed),
                         "--total-timesteps", str(TOTAL_TIMESTEPS),
                         "--num-steps", str(horizon), # Adicionando a flag de horizonte
-                        "--gamma", 1,
+                        "--gamma", str(1),
                         *FLAGS_STRING.split(),
                         "--track",
                         "--wandb-project-name", project_name
