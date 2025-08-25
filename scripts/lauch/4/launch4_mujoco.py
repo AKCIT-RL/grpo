@@ -11,11 +11,9 @@ PROJECT_NAMES = [
 
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
-    "CartPole-v1",
-    "Acrobot-v1"
+    "HalfCheetah-v4"
 ]
 
-# 5. Lista de número de ambientes para os experimentos
 NUM_ENVS_LIST = [
     8
 ]
