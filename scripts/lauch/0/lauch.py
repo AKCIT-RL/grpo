@@ -55,6 +55,7 @@ for seed in SEEDS:
                     "--seed", str(seed),
                     "--total-timesteps", str(TOTAL_TIMESTEPS),
                     *FLAGS_STRING.split(),
+                    "--track",
                     "--update-epochs", "1",
                     "--wandb-project-name", project_name
                 ]
