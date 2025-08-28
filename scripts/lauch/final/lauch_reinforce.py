@@ -6,13 +6,14 @@ SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # 2. Lista de nomes dos projetos (algoritmos)
 PROJECT_NAMES = [
-    "grpo-no-baseline"
-]
+    "reinforce1",
+    "reinforce-clip1"
+    ]
 
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
-    "CartPole-v1",
-    "Acrobot-v1"
+    "HalfCheetah-v4",
+    "MountainCarContinuous-v0"
 ]
 
 # 5. Lista de número de ambientes para os experimentos
@@ -26,10 +27,12 @@ for seed in SEEDS:
     for project_name in PROJECT_NAMES:
 
         # 3. Lógica condicional para definir as flags do algoritmo
-        if project_name == "ppo-mc":
-            FLAGS_STRING = "--no-use-entropy --no-use-gae --use-returns-mean-baseline"
-        elif project_name == "grpo-no-baseline":
-            FLAGS_STRING = "--no-use-entropy --no-use-baseline"
+        if project_name == "reinforce1":
+            FLAGS_STRING = "--use-reinforce"
+        elif project_name == "reinforce-clip1":
+            FLAGS_STRING = "--no-use-entropy --no-use-gae --use-ppo-clipping"
+        elif project_name == "ppo-mc":
+            FLAGS_STRING = "--no-use-entropy"
         
         for env_name in ENVIRONMENTS:
             # Define o total de timesteps com base no ambiente
@@ -38,10 +41,10 @@ for seed in SEEDS:
             else:
                 TOTAL_TIMESTEPS = 1000000
 
-            if env_name == "HalfCheetah-v4":
-                PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group_continuous_action.py"
+            if (env_name == "HalfCheetah-v4") or (env_name == "MountainCarContinuous-v0"):
+                PYTHON_SCRIPT = "scripts/algorithms/no-baseline/ppo_continuous_action.py"
             else:
-                PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group.py"
+                PYTHON_SCRIPT = "scripts/algorithms/no-baseline/ppo.py"
 
             for num_envs in NUM_ENVS_LIST:
                 command = [
@@ -52,6 +55,7 @@ for seed in SEEDS:
                     "--total-timesteps", str(TOTAL_TIMESTEPS),
                     *FLAGS_STRING.split(),
                     "--track",
+                    "--update_epochs", str(1),
                     "--wandb-project-name", project_name
                 ]
                 

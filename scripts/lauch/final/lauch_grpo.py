@@ -12,7 +12,8 @@ PROJECT_NAMES = [
 # 4. Lista de ambientes para os experimentos
 ENVIRONMENTS = [
     "CartPole-v1",
-    "Acrobot-v1"
+    "Acrobot-v1",
+    "MountainCarContinuous-v0"
 ]
 
 # 5. Lista de número de ambientes para os experimentos
@@ -26,10 +27,10 @@ for seed in SEEDS:
     for project_name in PROJECT_NAMES:
 
         # 3. Lógica condicional para definir as flags do algoritmo
-        if project_name == "ppo-mc":
-            FLAGS_STRING = "--no-use-entropy --no-use-gae --use-returns-mean-baseline"
-        elif project_name == "grpo-no-baseline":
+        if project_name == "grpo-no-baseline":
             FLAGS_STRING = "--no-use-entropy --no-use-baseline"
+        elif project_name == "grpo-group-no-entropy":
+            FLAGS_STRING = "--no-use-entropy"
         
         for env_name in ENVIRONMENTS:
             # Define o total de timesteps com base no ambiente
@@ -38,7 +39,7 @@ for seed in SEEDS:
             else:
                 TOTAL_TIMESTEPS = 1000000
 
-            if env_name == "HalfCheetah-v4":
+            if (env_name == "HalfCheetah-v4") or (env_name == "MountainCarContinuous-v0"):
                 PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group_continuous_action.py"
             else:
                 PYTHON_SCRIPT = "scripts/algorithms/originals/grpo_group.py"
